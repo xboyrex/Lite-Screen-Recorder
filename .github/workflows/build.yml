@@ -1,4 +1,4 @@
-name: Windows Build, MSI Installer & Release
+name: Windows Build, MSI Installer & GitHub Release
 
 on:
   push:
@@ -9,21 +9,21 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Create a new GitHub Release tag (example: v2.0.1). Leave blank for build-only."
-        required: false
+        description: "Required: publish a new release (example: v2.0.1). Existing tags are rejected."
+        required: true
         type: string
-        default: ""
+        default: "v2.0.1"
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-build-${{ github.ref }}
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build-windows:
-    name: Build EXE and MSI
+    name: Build EXE, MSI and publish release
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -41,8 +41,8 @@ jobs:
         with:
           dotnet-version: "6.0.x"
 
-      - name: Validate release tag input
-        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+      - name: Validate release tag
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -50,14 +50,15 @@ jobs:
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Invalid release tag '$env:RELEASE_TAG'. Use vMAJOR.MINOR.PATCH, for example v2.0.1."
           }
+
           $existing = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) {
-            throw "Could not verify whether the release tag exists on origin."
+            throw "Could not verify the remote tag. Stopping to avoid overwriting a release."
           }
           if ($existing) {
             throw "Tag '$env:RELEASE_TAG' already exists. Choose a new version; existing tags are never overwritten."
           }
-          Write-Host "Release tag is valid and unused: $env:RELEASE_TAG"
+          Write-Host "Validated unused release tag: $env:RELEASE_TAG"
 
       - name: Validate required project inputs
         shell: pwsh
@@ -115,7 +116,7 @@ jobs:
       - name: Build MSI installer
         shell: pwsh
         env:
-          PRODUCT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'v2.0.0' }}
+          PRODUCT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'v2.0.1' }}
         run: |
           $buildOutput = (Resolve-Path "quick-screen-recorder\bin\Release").Path
           $projectRoot = (Get-Location).Path
@@ -123,7 +124,7 @@ jobs:
           if ($env:PRODUCT_VERSION -match '^v?(\d+)\.(\d+)\.(\d+)') {
             $version = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
           } else {
-            $version = "2.0.0"
+            throw "Could not derive a valid MSI ProductVersion."
           }
 
           Write-Host "Building MSI version $version"
@@ -144,7 +145,48 @@ jobs:
           }
           Write-Host "MSI created: $($msi.Length) bytes"
 
-      - name: Verify final release files
+      - name: Verify MSI metadata and packaged application files
+        shell: pwsh
+        run: |
+          $msiPath = (Resolve-Path "release_artifacts\LiteScreenRecorder-Setup.msi").Path
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $database = $installer.OpenDatabase($msiPath, 0)
+
+          $propertyView = $database.OpenView('SELECT `Property`, `Value` FROM `Property` WHERE `Property`=''ProductName'' OR `Property`=''ProductVersion''')
+          $propertyView.Execute()
+          $properties = @{}
+          while ($record = $propertyView.Fetch()) {
+            $properties[$record.StringData(1)] = $record.StringData(2)
+          }
+          $propertyView.Close()
+
+          if ($properties["ProductName"] -ne "Lite Screen Recorder") {
+            throw "MSI ProductName is missing or incorrect."
+          }
+          if (-not $properties["ProductVersion"]) {
+            throw "MSI ProductVersion is missing."
+          }
+
+          $fileView = $database.OpenView('SELECT `FileName` FROM `File`')
+          $fileView.Execute()
+          $fileNames = @()
+          while ($record = $fileView.Fetch()) {
+            $fileNames += $record.StringData(1)
+          }
+          $fileView.Close()
+
+          $joined = $fileNames -join "`n"
+          foreach ($requiredName in @("Lite-Screen-Recorder.exe", "QuickLibrary.dll", "NAudio.dll", "Octokit.dll", "SharpAvi.dll")) {
+            if ($joined -notmatch [regex]::Escape($requiredName)) {
+              throw "MSI is missing required payload file: $requiredName"
+            }
+          }
+
+          Write-Host "MSI Product: $($properties['ProductName'])"
+          Write-Host "MSI Version: $($properties['ProductVersion'])"
+          Write-Host "MSI contains the EXE and required runtime DLLs."
+
+      - name: Verify final release assets
         shell: pwsh
         run: |
           $files = @(
@@ -177,6 +219,8 @@ jobs:
           name: Lite Screen Recorder ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
           body_path: CHANGELOG.md
           generate_release_notes: true
+          draft: false
+          prerelease: false
           fail_on_unmatched_files: true
           files: |
             release_artifacts/Lite-Screen-Recorder.exe
