@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgCircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="cyanAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F2FE"/>
+      <stop offset="100%" stop-color="#4FACFE"/>
+    </linearGradient>
+    <linearGradient id="coralDot" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF416C"/>
+      <stop offset="100%" stop-color="#FF4B2B"/>
+    </linearGradient>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Outer Minimal Deep-Navy Circle -->
+  <circle cx="256" cy="256" r="228" fill="url(#bgCircle)" filter="url(#shadow)"/>
+
+  <!-- Clean Minimal Cyan Ring -->
+  <circle cx="256" cy="256" r="212" fill="none" stroke="url(#cyanAccent)" stroke-width="18"/>
+
+  <!-- Minimal White Rounded Screen/Camera Frame Inside Circle -->
+  <rect x="136" y="156" width="184" height="200" rx="42" fill="#FFFFFF"/>
+  
+  <!-- Minimal Video Lens Polygon (Right Side) -->
+  <polygon points="328,216 392,172 392,340 328,296" fill="url(#cyanAccent)"/>
+
+  <!-- Minimal Coral Recording Dot Inside White Camera Body -->
+  <circle cx="228" cy="256" r="46" fill="url(#coralDot)"/>
+  <circle cx="214" cy="242" r="12" fill="#FFFFFF" opacity="0.65"/>
+</svg>
