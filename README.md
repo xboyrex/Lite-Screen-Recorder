@@ -24,7 +24,7 @@
 
 ---
 
-## 👑 Developer & Branding Profile
+## Admin
 
 | Field | Details |
 | :--- | :--- |
