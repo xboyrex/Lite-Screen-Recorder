@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional new release tag (example: v2.0.1). Use a tag that does not already exist."
+        description: "Create a new GitHub Release tag (example: v2.0.1). Leave blank for build-only."
         required: false
         type: string
         default: ""
@@ -18,12 +18,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: windows-release-${{ github.ref }}
+  group: windows-build-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build-windows:
-    name: Build EXE, MSI and Portable ZIP
+    name: Build EXE and MSI
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -41,6 +41,24 @@ jobs:
         with:
           dotnet-version: "6.0.x"
 
+      - name: Validate release tag input
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Invalid release tag '$env:RELEASE_TAG'. Use vMAJOR.MINOR.PATCH, for example v2.0.1."
+          }
+          $existing = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not verify whether the release tag exists on origin."
+          }
+          if ($existing) {
+            throw "Tag '$env:RELEASE_TAG' already exists. Choose a new version; existing tags are never overwritten."
+          }
+          Write-Host "Release tag is valid and unused: $env:RELEASE_TAG"
+
       - name: Validate required project inputs
         shell: pwsh
         run: |
@@ -56,7 +74,7 @@ jobs:
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {
-            Write-Error ("Required build inputs missing:`n" + ($missing -join "`n"))
+            throw ("Required build inputs missing:`n" + ($missing -join "`n"))
           }
           Write-Host "All required build inputs are present."
 
@@ -79,16 +97,19 @@ jobs:
           )
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $buildOutput $_)) }
           if ($missing) {
-            Write-Error ("Build output is incomplete:`n" + ($missing -join "`n"))
+            throw ("Build output is incomplete:`n" + ($missing -join "`n"))
           }
+
           New-Item -ItemType Directory -Force -Path "release_artifacts" | Out-Null
-          Copy-Item (Join-Path $buildOutput "Lite-Screen-Recorder.exe") "release_artifacts\Lite-Screen-Recorder.exe" -Force
+          Copy-Item (Join-Path $buildOutput "Lite-Screen-Recorder.exe") `
+            "release_artifacts\Lite-Screen-Recorder.exe" -Force
 
       - name: Install pinned WiX Toolset
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 5.0.2
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:USERPROFILE\.dotnet\tools" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           wix --version
 
       - name: Build MSI installer
@@ -98,12 +119,13 @@ jobs:
         run: |
           $buildOutput = (Resolve-Path "quick-screen-recorder\bin\Release").Path
           $projectRoot = (Get-Location).Path
-          $rawVersion = $env:PRODUCT_VERSION
-          if ($rawVersion -match '(\d+)\.(\d+)\.(\d+)') {
+
+          if ($env:PRODUCT_VERSION -match '^v?(\d+)\.(\d+)\.(\d+)') {
             $version = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
           } else {
             $version = "2.0.0"
           }
+
           Write-Host "Building MSI version $version"
           wix build -arch x64 `
             -d "BuildOutput=$buildOutput" `
@@ -111,46 +133,38 @@ jobs:
             -d "ProjectRoot=$projectRoot" `
             -o "release_artifacts\LiteScreenRecorder-Setup.msi" `
             "installer\LiteScreenRecorder.wxs"
+
           if (-not (Test-Path "release_artifacts\LiteScreenRecorder-Setup.msi")) {
             throw "WiX did not produce the MSI package."
           }
+
           $msi = Get-Item "release_artifacts\LiteScreenRecorder-Setup.msi"
           if ($msi.Length -lt 100KB) {
             throw "MSI output is unexpectedly small ($($msi.Length) bytes)."
           }
           Write-Host "MSI created: $($msi.Length) bytes"
 
-      - name: Create portable ZIP
-        shell: pwsh
-        run: |
-          $buildOutput = "quick-screen-recorder\bin\Release"
-          Compress-Archive -Path "$buildOutput\*" `
-            -DestinationPath "release_artifacts\Lite-Screen-Recorder-Portable.zip" `
-            -CompressionLevel Optimal -Force
-          if (-not (Test-Path "release_artifacts\Lite-Screen-Recorder-Portable.zip")) {
-            throw "Portable ZIP was not created."
-          }
-
-      - name: Verify release artifacts
+      - name: Verify final release files
         shell: pwsh
         run: |
           $files = @(
             "release_artifacts\Lite-Screen-Recorder.exe",
-            "release_artifacts\LiteScreenRecorder-Setup.msi",
-            "release_artifacts\Lite-Screen-Recorder-Portable.zip"
+            "release_artifacts\LiteScreenRecorder-Setup.msi"
           )
           foreach ($file in $files) {
-            if (-not (Test-Path $file)) { throw "Missing artifact: $file" }
+            if (-not (Test-Path $file)) { throw "Missing release file: $file" }
             $item = Get-Item $file
-            if ($item.Length -le 0) { throw "Empty artifact: $file" }
+            if ($item.Length -le 0) { throw "Empty release file: $file" }
             Write-Host ("{0} — {1:N0} bytes" -f $item.Name, $item.Length)
           }
 
-      - name: Upload build artifacts
+      - name: Upload EXE and MSI as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Lite-Screen-Recorder-Windows-${{ github.run_number }}
-          path: release_artifacts/*
+          path: |
+            release_artifacts/Lite-Screen-Recorder.exe
+            release_artifacts/LiteScreenRecorder-Setup.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -167,5 +181,3 @@ jobs:
           files: |
             release_artifacts/Lite-Screen-Recorder.exe
             release_artifacts/LiteScreenRecorder-Setup.msi
-            release_artifacts/Lite-Screen-Recorder-Portable.zip
-            icon.svg
