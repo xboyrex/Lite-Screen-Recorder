@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Lite Screen Recorder"
+      Manufacturer="Mayank Droid"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="A5D13D5B-91D1-4D45-9B4C-87F6E0F25A31"
+      Scope="perMachine"
+      Language="1033">
+
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of Lite Screen Recorder is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="LiteScreenRecorderIcon"
+          SourceFile="$(var.ProjectRoot)\quick-screen-recorder\rec.ico" />
+    <Property Id="ARPPRODUCTICON" Value="LiteScreenRecorderIcon" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Lite Screen Recorder" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Lite Screen Recorder" />
+    </StandardDirectory>
+
+    <!-- Package every runtime file produced by build.bat, including the EXE config and DLLs. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Files Include="$(var.BuildOutput)\**" />
+    </DirectoryRef>
+
+    <Component Directory="ApplicationProgramsFolder"
+               Guid="D40D5B62-8D5B-4C3A-9CB4-4DF6B12F6E01">
+      <Shortcut
+          Id="LiteScreenRecorderStartMenuShortcut"
+          Name="Lite Screen Recorder"
+          Description="Record your Windows desktop and audio"
+          Target="[INSTALLFOLDER]Lite-Screen-Recorder.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="LiteScreenRecorderIcon" />
+      <RemoveFolder Id="RemoveLiteScreenRecorderStartMenuFolder" On="uninstall" />
+      <RegistryValue
+          Root="HKLM"
+          Key="Software\Mayank Droid\Lite Screen Recorder"
+          Name="Installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>

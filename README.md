@@ -100,6 +100,27 @@ Run this script from the extracted `Lite-Screen-Recorder` project directory. On 
 
 The `v2.0.0` tag triggers `.github/workflows/build.yml`. Check the Actions page for the actual Windows build result; pushing a tag does not guarantee that compilation or release publication succeeds.
 
+## GitHub Actions — EXE + MSI + Portable ZIP
+
+Every push to `main`/`master` and every pull request runs a Windows build on `windows-latest`.
+
+The workflow:
+1. Compiles the WinForms application in Release mode with MSBuild.
+2. Verifies the executable and all required runtime DLLs.
+3. Builds `LiteScreenRecorder-Setup.msi` using pinned WiX Toolset 5.0.2.
+4. Creates `Lite-Screen-Recorder-Portable.zip` from the complete runtime output.
+5. Uploads all three artifacts to the Actions run.
+6. Publishes all three files to GitHub Releases when a `v*` tag is pushed.
+
+**Artifacts**
+- `Lite-Screen-Recorder.exe` — application executable (requires the companion DLLs to be alongside it; use the portable ZIP for a ready-to-run folder).
+- `LiteScreenRecorder-Setup.msi` — Windows Installer package with a Start Menu shortcut.
+- `Lite-Screen-Recorder-Portable.zip` — executable and its runtime dependencies.
+
+The MSI is built with WiX rather than the legacy Visual Studio `.vdproj`, so the GitHub runner does not need the Visual Studio Installer Projects extension. The legacy `.vdproj` is retained as source/reference but is not used by CI.
+
+To publish a release after the workflow changes have been pushed, create and push a new, unused tag (for example `v2.0.1`). Do not force-update an existing release tag. Alternatively, run the workflow manually and provide a new `release_tag`.
+
 ## 📄 License
 
 Licensed under the **GNU General Public License v3.0 (GPL-3.0)** — Copyright © 2026 **ㅤᏞᴀᴢʏㅤᎷꫝʏᴀɴк まやんく (`@xboyrex`)**.

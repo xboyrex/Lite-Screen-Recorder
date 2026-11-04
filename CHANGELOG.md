@@ -19,3 +19,10 @@ All notable changes to **Lite Screen Recorder** by **ㅤᏞᴀᴢʏㅤᎷꫝʏ�
 ### 🐛 Bug Fixes
 - Fixed cursor position offset when capturing a custom screen area (`X > 0, Y > 0`) or secondary monitor.
 - Fixed `QuickLibrary.dll` MSBuild hint path so the project builds out-of-the-box on any Windows PC and GitHub Actions.
+
+## [Unreleased] — CI Packaging
+
+- Added a GitHub Actions Windows pipeline that builds the application EXE, WiX MSI installer, and portable ZIP.
+- Added validation for required build inputs and runtime dependencies before packaging.
+- MSI packaging uses pinned WiX Toolset 5.0.2 and includes the complete Release output plus a Start Menu shortcut.
+- The legacy Visual Studio `.vdproj` remains in the repository but is not invoked by CI.

@@ -1,75 +1,171 @@
-name: Super-Fast Build & Auto-Release (Lite Screen Recorder)
+name: Windows Build, MSI Installer & Release
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main, master]
+    tags: ["v*"]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional Release Tag to publish (e.g. v2.0.0)'
+        description: "Optional new release tag (example: v2.0.1). Use a tag that does not already exist."
         required: false
-        default: ''
+        type: string
+        default: ""
 
 permissions:
   contents: write
 
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-package:
-    name: Fast Windows Build (.exe + .msi + .zip) (@xboyrex)
+  build-windows:
+    name: Build EXE, MSI and Portable ZIP
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Ensure Bundled Libraries
+      - name: Setup .NET SDK for WiX
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Validate required project inputs
+        shell: pwsh
         run: |
-          if (!(Test-Path "packages\QuickLibrary\QuickLibrary.dll")) {
-            New-Item -ItemType Directory -Force -Path "packages\QuickLibrary" | Out-Null
-            if (Test-Path "quick-screen-recorder\bin\Release\QuickLibrary.dll") {
-              Copy-Item "quick-screen-recorder\bin\Release\QuickLibrary.dll" "packages\QuickLibrary\QuickLibrary.dll" -Force
-            }
+          $required = @(
+            "build.bat",
+            "quick-screen-recorder\quick-screen-recorder.csproj",
+            "quick-screen-recorder\rec.ico",
+            "packages\QuickLibrary\QuickLibrary.dll",
+            "packages\NAudio.1.10.0\lib\net35\NAudio.dll",
+            "packages\Octokit.0.3.4\lib\net45\Octokit.dll",
+            "packages\SharpAvi.2.1.2\lib\net45\SharpAvi.dll",
+            "installer\LiteScreenRecorder.wxs"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Error ("Required build inputs missing:`n" + ($missing -join "`n"))
           }
+          Write-Host "All required build inputs are present."
 
-      - name: Build Lite Screen Recorder & Setup Installer
-        run: |
-          cmd /c build.bat --nopause
+      - name: Build Windows application
+        shell: cmd
+        run: build.bat --nopause
 
-      - name: Stage Release Artifacts (.exe, Setup.exe, .msi, Portable.zip)
+      - name: Verify EXE and runtime dependencies
+        shell: pwsh
         run: |
+          $buildOutput = "quick-screen-recorder\bin\Release"
+          $required = @(
+            "Lite-Screen-Recorder.exe",
+            "Lite-Screen-Recorder.exe.config",
+            "NAudio.dll",
+            "Octokit.dll",
+            "QuickLibrary.dll",
+            "SharpAvi.dll",
+            "rec.ico"
+          )
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $buildOutput $_)) }
+          if ($missing) {
+            Write-Error ("Build output is incomplete:`n" + ($missing -join "`n"))
+          }
           New-Item -ItemType Directory -Force -Path "release_artifacts" | Out-Null
-          Copy-Item "quick-screen-recorder\bin\Release\Lite-Screen-Recorder.exe" "release_artifacts\Lite-Screen-Recorder.exe" -Force
-          if (Test-Path "QuickScreenRecorder-Setup\Release\LiteScreenRecorder-Setup.exe") {
-            Copy-Item "QuickScreenRecorder-Setup\Release\LiteScreenRecorder-Setup.exe" "release_artifacts\LiteScreenRecorder-Setup.exe" -Force
+          Copy-Item (Join-Path $buildOutput "Lite-Screen-Recorder.exe") "release_artifacts\Lite-Screen-Recorder.exe" -Force
+
+      - name: Install pinned WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          wix --version
+
+      - name: Build MSI installer
+        shell: pwsh
+        env:
+          PRODUCT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'v2.0.0' }}
+        run: |
+          $buildOutput = (Resolve-Path "quick-screen-recorder\bin\Release").Path
+          $projectRoot = (Get-Location).Path
+          $rawVersion = $env:PRODUCT_VERSION
+          if ($rawVersion -match '(\d+)\.(\d+)\.(\d+)') {
+            $version = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          } else {
+            $version = "2.0.0"
           }
-          if (Test-Path "QuickScreenRecorder-Setup\Release\Lite-Screen-Recorder-Portable.zip") {
-            Copy-Item "QuickScreenRecorder-Setup\Release\Lite-Screen-Recorder-Portable.zip" "release_artifacts\Lite-Screen-Recorder-Portable.zip" -Force
+          Write-Host "Building MSI version $version"
+          wix build -arch x64 `
+            -d "BuildOutput=$buildOutput" `
+            -d "ProductVersion=$version" `
+            -d "ProjectRoot=$projectRoot" `
+            -o "release_artifacts\LiteScreenRecorder-Setup.msi" `
+            "installer\LiteScreenRecorder.wxs"
+          if (-not (Test-Path "release_artifacts\LiteScreenRecorder-Setup.msi")) {
+            throw "WiX did not produce the MSI package."
           }
-          if (Test-Path "QuickScreenRecorder-Setup\Release\LiteScreenRecorder-Setup.msi") {
-            Copy-Item "QuickScreenRecorder-Setup\Release\LiteScreenRecorder-Setup.msi" "release_artifacts\LiteScreenRecorder-Setup.msi" -Force
+          $msi = Get-Item "release_artifacts\LiteScreenRecorder-Setup.msi"
+          if ($msi.Length -lt 100KB) {
+            throw "MSI output is unexpectedly small ($($msi.Length) bytes)."
+          }
+          Write-Host "MSI created: $($msi.Length) bytes"
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $buildOutput = "quick-screen-recorder\bin\Release"
+          Compress-Archive -Path "$buildOutput\*" `
+            -DestinationPath "release_artifacts\Lite-Screen-Recorder-Portable.zip" `
+            -CompressionLevel Optimal -Force
+          if (-not (Test-Path "release_artifacts\Lite-Screen-Recorder-Portable.zip")) {
+            throw "Portable ZIP was not created."
           }
 
-      - name: Upload Build Artifacts
+      - name: Verify release artifacts
+        shell: pwsh
+        run: |
+          $files = @(
+            "release_artifacts\Lite-Screen-Recorder.exe",
+            "release_artifacts\LiteScreenRecorder-Setup.msi",
+            "release_artifacts\Lite-Screen-Recorder-Portable.zip"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing artifact: $file" }
+            $item = Get-Item $file
+            if ($item.Length -le 0) { throw "Empty artifact: $file" }
+            Write-Host ("{0} — {1:N0} bytes" -f $item.Name, $item.Length)
+          }
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Lite-Screen-Recorder-Windows-Release
+          name: Lite-Screen-Recorder-Windows-${{ github.run_number }}
           path: release_artifacts/*
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Publish GitHub Release (on Tag or Manual Dispatch)
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || github.ref_name }}
-          name: "Lite Screen Recorder ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || github.ref_name }} — by Mayank Droid (@xboyrex)"
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Lite Screen Recorder ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
           body_path: CHANGELOG.md
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
-            release_artifacts/*
+            release_artifacts/Lite-Screen-Recorder.exe
+            release_artifacts/LiteScreenRecorder-Setup.msi
+            release_artifacts/Lite-Screen-Recorder-Portable.zip
             icon.svg
